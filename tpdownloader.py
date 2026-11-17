@@ -22,6 +22,7 @@ import smtplib
 import sys
 import time
 import tomllib
+from datetime import datetime
 from email.message import EmailMessage, Message
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -37,6 +38,8 @@ ENV_PATH = BASE_DIR / ".env"
 STATE_DIR = BASE_DIR / "state"
 COOKIES = STATE_DIR / "cookies.txt"
 LAST_PAGE = STATE_DIR / "last_page.html"
+# One line per emailed file: "<file name>\t<when>". A file listed here isn't emailed again.
+SENT_LOG = STATE_DIR / "sent.txt"
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 CREDENTIALS = ("TPDOWNLOADER_SITE_USERNAME", "TPDOWNLOADER_SITE_PASSWORD", "TPDOWNLOADER_GMAIL_ADDRESS", "TPDOWNLOADER_GMAIL_APP_PASSWORD")
 KEYCHAIN_SERVICE = "tpdownloader"
@@ -180,6 +183,17 @@ def download_file(page_url: str, username: str, password: str) -> Path:
 
 # --- Step 4: send ---------------------------------------------------------
 
+def already_sent(path: Path) -> bool:
+    if not SENT_LOG.exists():
+        return False
+    return any(line.split("\t", 1)[0] == path.name for line in SENT_LOG.read_text().splitlines())
+
+
+def mark_sent(path: Path) -> None:
+    with SENT_LOG.open("a") as f:
+        f.write(f"{path.name}\t{datetime.now().isoformat(timespec='seconds')}\n")
+
+
 def send_file(mail: dict, address: str, password: str, path: Path) -> None:
     msg = EmailMessage()
     msg["From"] = address
@@ -269,6 +283,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--download-only", action="store_true",
                         help="only run the website part (useful while setting up)")
+    parser.add_argument("--force-send", action="store_true",
+                        help=f"email the file even if it was sent before (recorded in {SENT_LOG.name})")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -279,6 +295,9 @@ def main() -> None:
     path = download_file(PAGE_URL, creds["TPDOWNLOADER_SITE_USERNAME"], creds["TPDOWNLOADER_SITE_PASSWORD"])
     if args.download_only:
         return
+    if already_sent(path) and not args.force_send:
+        log.info("%s was already sent (see %s); use --force-send to send it again", path.name, SENT_LOG)
+        return
 
     mail, address, password = config["mail"], creds["TPDOWNLOADER_GMAIL_ADDRESS"], creds["TPDOWNLOADER_GMAIL_APP_PASSWORD"]
     imap = imap_connect(address, password)
@@ -286,6 +305,9 @@ def main() -> None:
         # Remember where the inbox ends *before* sending, so a fast reply can't be missed.
         since_uid = inbox_uidnext(imap)
         send_file(mail, address, password, path)
+        # Recorded as soon as the email is out, so a failed confirmation doesn't cause a resend
+        # on the next run; rerun with --force-send if the confirmation never went through.
+        mark_sent(path)
         handle_reply(imap, mail, since_uid)
     finally:
         imap.logout()
