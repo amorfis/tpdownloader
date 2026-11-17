@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Runtime data: login cookies, saved pages, downloaded issues
+state/
+downloads/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store

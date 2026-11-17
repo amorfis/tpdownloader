@@ -1,0 +1,12 @@
+# Credentials are not here: they come from .env, environment variables, or the Keychain.
+
+[mail]
+send_to = "recipient@example.com"
+send_subject = ""   # empty = use the file name
+send_body = ""
+
+# The reply to wait for (ASCII substrings, case-insensitive).
+wait_from = "noreply@example.com"
+wait_subject = "Confirm"
+wait_timeout_minutes = 30
+poll_interval_seconds = 30
