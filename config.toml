@@ -1,7 +1,7 @@
-# Credentials are not here: they come from .env, environment variables, or the Keychain.
+# Credentials and the recipient address are not here: they come from .env, environment variables,
+# or the Keychain (TPDOWNLOADER_SEND_TO for the recipient).
 
 [mail]
-send_to = "recipient@example.com"
 send_subject = ""   # empty = use the file name
 send_body = ""
 

@@ -2,7 +2,7 @@
 """Download a file from a website, email it, wait for a reply, open the link in the reply, trash the reply.
 
 Credentials (TPDOWNLOADER_SITE_USERNAME, TPDOWNLOADER_SITE_PASSWORD, TPDOWNLOADER_GMAIL_ADDRESS,
-TPDOWNLOADER_GMAIL_APP_PASSWORD) are looked up in .env next to this script, then in environment
+TPDOWNLOADER_GMAIL_APP_PASSWORD) and the recipient (TPDOWNLOADER_SEND_TO) are looked up in .env next to this script, then in environment
 variables, then in the macOS Keychain:
     .venv/bin/python -m keyring set tpdownloader TPDOWNLOADER_SITE_PASSWORD
 Everything else is in config.toml.
@@ -41,7 +41,9 @@ LAST_PAGE = STATE_DIR / "last_page.html"
 # One line per emailed file: "<file name>\t<when>". A file listed here isn't emailed again.
 SENT_LOG = STATE_DIR / "sent.txt"
 DOWNLOAD_DIR = BASE_DIR / "downloads"
-CREDENTIALS = ("TPDOWNLOADER_SITE_USERNAME", "TPDOWNLOADER_SITE_PASSWORD", "TPDOWNLOADER_GMAIL_ADDRESS", "TPDOWNLOADER_GMAIL_APP_PASSWORD")
+# Secrets and private settings, kept out of config.toml because the repository is public.
+CREDENTIALS = ("TPDOWNLOADER_SITE_USERNAME", "TPDOWNLOADER_SITE_PASSWORD", "TPDOWNLOADER_GMAIL_ADDRESS",
+               "TPDOWNLOADER_GMAIL_APP_PASSWORD", "TPDOWNLOADER_SEND_TO")
 KEYCHAIN_SERVICE = "tpdownloader"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
@@ -194,10 +196,10 @@ def mark_sent(path: Path) -> None:
         f.write(f"{path.name}\t{datetime.now().isoformat(timespec='seconds')}\n")
 
 
-def send_file(mail: dict, address: str, password: str, path: Path) -> None:
+def send_file(mail: dict, address: str, password: str, send_to: str, path: Path) -> None:
     msg = EmailMessage()
     msg["From"] = address
-    msg["To"] = mail["send_to"]
+    msg["To"] = send_to
     msg["Subject"] = mail.get("send_subject") or path.name
     msg.set_content(mail.get("send_body", ""))
     ctype, _ = mimetypes.guess_type(path)
@@ -207,7 +209,7 @@ def send_file(mail: dict, address: str, password: str, path: Path) -> None:
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(address, password)
         smtp.send_message(msg)
-    log.info("Sent %s to %s", path.name, mail["send_to"])
+    log.info("Sent %s to %s", path.name, send_to)
 
 
 # --- Steps 5-8: wait for reply, open link, trash --------------------------
@@ -304,7 +306,7 @@ def main() -> None:
     try:
         # Remember where the inbox ends *before* sending, so a fast reply can't be missed.
         since_uid = inbox_uidnext(imap)
-        send_file(mail, address, password, path)
+        send_file(mail, address, password, creds["TPDOWNLOADER_SEND_TO"], path)
         # Recorded as soon as the email is out, so a failed confirmation doesn't cause a resend
         # on the next run; rerun with --force-send if the confirmation never went through.
         mark_sent(path)
