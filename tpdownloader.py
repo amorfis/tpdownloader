@@ -5,6 +5,7 @@ Credentials (TPDOWNLOADER_SITE_USERNAME, TPDOWNLOADER_SITE_PASSWORD, TPDOWNLOADE
 TPDOWNLOADER_GMAIL_APP_PASSWORD) and the recipient (TPDOWNLOADER_SEND_TO) are looked up in .env next to this script, then in environment
 variables, then in the macOS Keychain:
     .venv/bin/python -m keyring set tpdownloader TPDOWNLOADER_SITE_PASSWORD
+Optionally, TPDOWNLOADER_NTFY_TOPIC (looked up the same way) turns on phone notifications via ntfy.
 Everything else is in config.toml.
 """
 
@@ -47,6 +48,8 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 # Secrets and private settings, kept out of config.toml because the repository is public.
 CREDENTIALS = ("TPDOWNLOADER_SITE_USERNAME", "TPDOWNLOADER_SITE_PASSWORD", "TPDOWNLOADER_GMAIL_ADDRESS",
                "TPDOWNLOADER_GMAIL_APP_PASSWORD", "TPDOWNLOADER_SEND_TO")
+# Looked up the same way, but may be missing.
+OPTIONAL_CREDENTIALS = ("TPDOWNLOADER_NTFY_TOPIC",)
 KEYCHAIN_SERVICE = "tpdownloader"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
@@ -73,20 +76,38 @@ REPLY_LINK_PATTERN = r"^https://www\.amazon\.com/.*sendtokindle(/|%2F)verificati
 # used once."). Then the reply isn't trashed and the file isn't marked confirmed.
 CONFIRM_FAILED_PATTERN = r"unable to verify|link isn.t working"
 
+# Phone notifications go through ntfy (https://ntfy.sh): install the ntfy app on the phone and
+# subscribe to the topic set in TPDOWNLOADER_NTFY_TOPIC. Anyone who knows the topic can read and
+# post to it, so make it hard to guess. No topic = no notifications.
+NTFY_SERVER = "https://ntfy.sh"
+
 log = logging.getLogger("tpdownloader")
 
 
 def load_credentials() -> dict[str, str]:
     dotenv = dotenv_values(ENV_PATH)
     creds = {}
-    for name in CREDENTIALS:
+    for name in CREDENTIALS + OPTIONAL_CREDENTIALS:
         creds[name] = (dotenv.get(name) or os.environ.get(name)
                       or keyring.get_password(KEYCHAIN_SERVICE, name))
-    missing = [key for key, value in creds.items() if not value]
+    missing = [key for key in CREDENTIALS if not creds[key]]
     if missing:
         sys.exit(f"Missing credentials: {', '.join(missing)}. Put them in {ENV_PATH}, "
                  f"the environment, or the Keychain (keyring set {KEYCHAIN_SERVICE} <NAME>)")
     return creds
+
+
+def notify(topic: str | None, message: str) -> None:
+    """Push a notification to the phone. A failure is only logged, it never stops the run."""
+    if not topic:
+        return
+    try:
+        response = requests.post(f"{NTFY_SERVER}/{topic}", data=message.encode(),
+                                 headers={"Title": "tpdownloader"}, timeout=15)
+        response.raise_for_status()
+        log.info("Sent phone notification: %s", message)
+    except requests.RequestException as e:
+        log.warning("Could not send the phone notification: %s", e)
 
 
 # --- Steps 1-3: website ---------------------------------------------------
@@ -351,6 +372,7 @@ def main() -> None:
     with CONFIG_PATH.open("rb") as f:
         config = tomllib.load(f)
     creds = load_credentials()
+    notify(creds["TPDOWNLOADER_NTFY_TOPIC"], "Started")
 
     path = download_file(PAGE_URL, creds["TPDOWNLOADER_SITE_USERNAME"], creds["TPDOWNLOADER_SITE_PASSWORD"])
     if args.download_only:
