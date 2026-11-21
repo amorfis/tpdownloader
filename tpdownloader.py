@@ -48,8 +48,8 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 # Secrets and private settings, kept out of config.toml because the repository is public.
 CREDENTIALS = ("TPDOWNLOADER_SITE_USERNAME", "TPDOWNLOADER_SITE_PASSWORD", "TPDOWNLOADER_GMAIL_ADDRESS",
                "TPDOWNLOADER_GMAIL_APP_PASSWORD", "TPDOWNLOADER_SEND_TO")
-# Looked up the same way, but may be missing.
-OPTIONAL_CREDENTIALS = ("TPDOWNLOADER_NTFY_TOPIC",)
+# Optional, looked up the same way. If it's not set, no notifications are sent.
+NTFY_TOPIC = "TPDOWNLOADER_NTFY_TOPIC"
 KEYCHAIN_SERVICE = "tpdownloader"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
@@ -79,31 +79,38 @@ CONFIRM_FAILED_PATTERN = r"unable to verify|link isn.t working"
 # Phone notifications go through ntfy (https://ntfy.sh): install the ntfy app on the phone and
 # subscribe to the topic set in TPDOWNLOADER_NTFY_TOPIC. Anyone who knows the topic can read and
 # post to it, so make it hard to guess. No topic = no notifications.
+# A run sends at most one: when the file was sent and confirmed, or when the run failed.
 NTFY_SERVER = "https://ntfy.sh"
 
 log = logging.getLogger("tpdownloader")
 
 
+def lookup(name: str) -> str | None:
+    """A secret or private setting from .env, else the environment, else the Keychain; None if unset."""
+    return (dotenv_values(ENV_PATH).get(name) or os.environ.get(name)
+            or keyring.get_password(KEYCHAIN_SERVICE, name))
+
+
 def load_credentials() -> dict[str, str]:
-    dotenv = dotenv_values(ENV_PATH)
-    creds = {}
-    for name in CREDENTIALS + OPTIONAL_CREDENTIALS:
-        creds[name] = (dotenv.get(name) or os.environ.get(name)
-                      or keyring.get_password(KEYCHAIN_SERVICE, name))
-    missing = [key for key in CREDENTIALS if not creds[key]]
+    creds = {name: lookup(name) for name in CREDENTIALS}
+    missing = [key for key, value in creds.items() if not value]
     if missing:
         sys.exit(f"Missing credentials: {', '.join(missing)}. Put them in {ENV_PATH}, "
                  f"the environment, or the Keychain (keyring set {KEYCHAIN_SERVICE} <NAME>)")
     return creds
 
 
-def notify(topic: str | None, message: str) -> None:
-    """Push a notification to the phone. A failure is only logged, it never stops the run."""
+def notify(topic: str | None, title: str, message: str, tag: str) -> None:
+    """Push a notification to the phone; does nothing without a topic.
+
+    A failure to send is only logged, it never stops the run. tag is an ntfy tag; emoji names
+    like "warning" show as an icon.
+    """
     if not topic:
         return
     try:
         response = requests.post(f"{NTFY_SERVER}/{topic}", data=message.encode(),
-                                 headers={"Title": "tpdownloader"}, timeout=15)
+                                 headers={"Title": title, "Tags": tag}, timeout=15)
         response.raise_for_status()
         log.info("Sent phone notification: %s", message)
     except requests.RequestException as e:
@@ -369,20 +376,37 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # Looked up before anything else, so even a failure loading the credentials is notified.
+    topic = lookup(NTFY_TOPIC)  # None (not set) = notify() does nothing
+    try:
+        confirmed = run(args)
+    except SystemExit as e:
+        # Errors in this script exit with a message; code 0 / None is a normal exit.
+        if e.code not in (0, None):
+            notify(topic, "tpdownloader failed", str(e.code), "warning")
+        raise
+    except Exception as e:  # KeyboardInterrupt isn't an Exception, so Ctrl-C sends nothing
+        notify(topic, "tpdownloader failed", f"{type(e).__name__}: {e}", "warning")
+        raise
+    if confirmed:
+        notify(topic, "Sent to Kindle", f"{confirmed} was sent and confirmed", "white_check_mark")
+
+
+def run(args: argparse.Namespace) -> str | None:
+    """Do the work; return the name of the file sent and confirmed, or None if nothing was sent."""
     with CONFIG_PATH.open("rb") as f:
         config = tomllib.load(f)
     creds = load_credentials()
-    notify(creds["TPDOWNLOADER_NTFY_TOPIC"], "Started")
 
     path = download_file(PAGE_URL, creds["TPDOWNLOADER_SITE_USERNAME"], creds["TPDOWNLOADER_SITE_PASSWORD"])
     if args.download_only:
-        return
+        return None
     records = load_sent()
     record = records.get(path.name)
     if record and record["confirmed_at"] and not args.force_send:
         log.info("%s was already sent and confirmed (see %s); use --force-send to send it again",
                  path.name, SENT_LOG)
-        return
+        return None
 
     mail, address, password = config["mail"], creds["TPDOWNLOADER_GMAIL_ADDRESS"], creds["TPDOWNLOADER_GMAIL_APP_PASSWORD"]
     imap = imap_connect(address, password)
@@ -404,6 +428,7 @@ def main() -> None:
     finally:
         imap.logout()
     log.info("Done")
+    return path.name
 
 
 if __name__ == "__main__":
