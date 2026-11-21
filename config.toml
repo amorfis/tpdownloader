@@ -6,7 +6,7 @@ send_subject = ""   # empty = use the file name
 send_body = ""
 
 # The reply to wait for (ASCII substrings, case-insensitive).
-wait_from = "noreply@example.com"
-wait_subject = "Confirm"
-wait_timeout_minutes = 30
+wait_from = "do-not-reply@amazon.com"
+wait_subject = "Verify your Send to Kindle document request"
+wait_timeout_minutes = 10
 poll_interval_seconds = 30
